@@ -38,9 +38,15 @@ FORBIDDEN_LOCATIONS_TEXT = ['school']
 # LOGIC FUNCTION
 # ==========================================
 def scrub_data(df):
-    # Pre-process
+    # --- PRE-PROCESSING & CLEANING ---
     df.columns = df.columns.str.strip()
     
+    # 1. CLEAN PROCEDURE CODES (The Fix!)
+    # This forces text like "97153 Jersey" to become Numbers. 
+    # If it can't turn it into a number, it deletes that row to prevent errors.
+    df['ProcedureCode'] = pd.to_numeric(df['ProcedureCode'], errors='coerce')
+    df = df.dropna(subset=['ProcedureCode'])
+
     # Handle Names
     if 'Client Name' not in df.columns:
         df['Client Name'] = df['ClientFirstName'].fillna('') + ' ' + df['ClientLastName'].fillna('')
