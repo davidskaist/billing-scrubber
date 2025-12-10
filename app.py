@@ -136,4 +136,5 @@ def scrub_session_notes(pdf_file):
             # --- NEW CHECK: CPT CODES ---
             # Check if at least one standard code appears (97153, 97155, 96159, etc)
             # We look for the 5-digit number pattern
-            found_codes = re.findall(r'\b(97153|97155|97156
+found_codes = re.findall(r'\b(97153|97155|97156|96158|96159|96167|96168)\b', note_content)
+
