@@ -4,6 +4,7 @@ import pdfplumber
 import io
 import warnings
 import re
+from collections import Counter
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -34,17 +35,19 @@ MIN_GOALS_PER_HOUR = 1
 # LOGIC: BILLING SCRUBBER
 # ==========================================
 def scrub_billing_data(df):
-    # [Logic remains unchanged]
+    # Pre-processing
     df.columns = df.columns.str.strip()
-    # Clean Procedure Codes
+    # Clean Procedure Codes (Fix dirty data)
     df['ProcedureCode'] = pd.to_numeric(df['ProcedureCode'], errors='coerce')
     df = df.dropna(subset=['ProcedureCode'])
 
+    # Standardize Names
     if 'Client Name' not in df.columns:
         df['Client Name'] = df['ClientFirstName'].fillna('') + ' ' + df['ClientLastName'].fillna('')
     if 'Provider Name' not in df.columns:
         df['Provider Name'] = df['ProviderFirstName'].fillna('') + ' ' + df['ProviderLastName'].fillna('')
 
+    # Standardize Dates
     try:
         df['TimeWorkedFrom'] = pd.to_datetime(df['TimeWorkedFrom'])
         df['TimeWorkedTo'] = pd.to_datetime(df['TimeWorkedTo'])
@@ -57,25 +60,40 @@ def scrub_billing_data(df):
     
     issues = []
 
+    # --- ROW CHECKS ---
     for index, row in df.iterrows():
+        # Session Length
         if row['TimeWorkedInHours'] > MAX_SESSION_HOURS:
             issues.append({'Client': row['Client Name'], 'Date': row['DateOnly'], 'Issue': 'Session > 4 Hours', 'Detail': f"{row['ProcedureCode']} lasted {row['TimeWorkedInHours']} hrs"})
+        
+        # Supervision Length
         if row['ProcedureCode'] == CODE_SUPERVISION_1 and row['TimeWorkedInHours'] > MAX_SUPERVISION_HOURS:
              issues.append({'Client': row['Client Name'], 'Date': row['DateOnly'], 'Issue': 'Supervision > 2 Hours', 'Detail': f"{row['TimeWorkedInHours']} hrs"})
+        
+        # Location Check
         loc_code = row.get('LocationCode', '')
         loc_desc = str(row.get('LocationDescription', '')).lower()
         if loc_code in FORBIDDEN_LOCATIONS_CODES or any(x in loc_desc for x in FORBIDDEN_LOCATIONS_TEXT):
              issues.append({'Client': row['Client Name'], 'Date': row['DateOnly'], 'Issue': 'Forbidden Location', 'Detail': f"{loc_code} {loc_desc}"})
+        
+        # Travel Time
         if row['DriveTimeInMinutes'] > HIGH_DRIVE_TIME:
              issues.append({'Client': row['Client Name'], 'Date': row['DateOnly'], 'Issue': 'High Travel Time', 'Detail': f"{row['DriveTimeInMinutes']} mins"})
 
+    # --- DAILY GROUP CHECKS ---
     for (client, date), group in df.groupby(['Client Name', 'DateOnly']):
         codes_today = group['ProcedureCode'].tolist()
+        
+        # Direct vs Family Conflict
         if CODE_DIRECT_CARE in codes_today and any(c in CODES_CONFLICT_WITH_DIRECT for c in codes_today):
             issues.append({'Client': client, 'Date': date, 'Issue': 'Direct Care & Family Conflict', 'Detail': 'Cannot bill 97153 + Family same day'})
+        
+        # Base Code Duplicates
         for base_code in BASE_CODES:
             if codes_today.count(base_code) > 1:
                 issues.append({'Client': client, 'Date': date, 'Issue': f'Duplicate Base {base_code}', 'Detail': 'Billed multiple times'})
+        
+        # Add-on Logic
         for base_code, addon_code in BASE_ADDON_PAIRS.items():
             addon_rows = group[group['ProcedureCode'] == addon_code]
             base_rows = group[group['ProcedureCode'] == base_code]
@@ -86,6 +104,7 @@ def scrub_billing_data(df):
                     if base_rows['TimeWorkedFrom'].min() > addon_rows['TimeWorkedFrom'].min():
                         issues.append({'Client': client, 'Date': date, 'Issue': 'Sequence Error', 'Detail': f'Base {base_code} started AFTER Add-on'})
 
+    # --- OVERLAP CHECKS ---
     for sup_code, target_code in SUPERVISION_PAIRS.items():
         sup_rows = df[df['ProcedureCode'] == sup_code]
         target_rows = df[df['ProcedureCode'] == target_code]
@@ -97,9 +116,11 @@ def scrub_billing_data(df):
                 if sup_code == CODE_SUPERVISION_1:
                     df.loc[overlap.index, 'is_supervised'] = True
 
+    # --- MONTHLY CHECKS ---
     for client, group in df.groupby('Client Name'):
         if not any(c in group['ProcedureCode'].tolist() for c in CODE_PARENT_TRAINING_ALL):
             issues.append({'Client': client, 'Date': 'Monthly', 'Issue': 'Missing Parent Training', 'Detail': 'None this month'})
+        
         direct_providers = group[group['ProcedureCode'] == CODE_DIRECT_CARE]['Provider Name'].unique()
         for provider in direct_providers:
             p_sessions = group[(group['Provider Name'] == provider) & (group['ProcedureCode'] == CODE_DIRECT_CARE)]
@@ -109,7 +130,7 @@ def scrub_billing_data(df):
     return issues
 
 # ==========================================
-# LOGIC: NOTE SCRUBBER (PDF) - UPDATED
+# LOGIC: NOTE SCRUBBER (PDF)
 # ==========================================
 def scrub_session_notes(pdf_file):
     note_issues = []
@@ -129,14 +150,12 @@ def scrub_session_notes(pdf_file):
         # Only process if it looks like a note
         if "Goal Summary" in note_content or "Activities that were used" in note_content:
             
-            # --- NEW CHECK: TAX ID ---
+            # --- CHECK: TAX ID ---
             if "Tax ID:" not in note_content:
                 note_issues.append({'Note #': i+1, 'Issue': 'Missing Tax ID', 'Detail': 'Tax ID field not found'})
 
-            # --- NEW CHECK: CPT CODES ---
-            # Check if at least one standard code appears (97153, 97155, 96159, etc)
-            # We look for the 5-digit number pattern
+            # --- CHECK: CPT CODES ---
+            # Using Regex to find any of the standard codes
             found_codes = re.findall(r'\b(97153|97155|97156|96158|96159|96167|96168)\b', note_content)
-
-
-
+            if not found_codes:
+                 note_issues.append({'Note #
