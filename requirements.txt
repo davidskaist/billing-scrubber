@@ -3,3 +3,6 @@ pandas
 xlsxwriter
 openpyxl
 pdfplumber
+streamlit-authenticator
+PyYAML
+bcrypt
