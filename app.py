@@ -13,8 +13,9 @@ warnings.filterwarnings("ignore")
 # ==========================================
 # 0. PAGE CONFIG & BRANDING
 # ==========================================
-APP_NAME = "Compliance Audit Portal"
-APP_ICON = "🛡️" 
+APP_NAME = "IQ-A Portal"
+# Browser tab icon (emojis work best here)
+APP_ICON = "✅" 
 
 st.set_page_config(page_title=APP_NAME, page_icon=APP_ICON, layout="wide")
 
@@ -32,8 +33,18 @@ def check_password():
     if st.session_state["password_correct"]:
         return True
 
-    st.markdown(f"# {APP_ICON} {APP_NAME}")
-    st.markdown("### Secure Login")
+    # LOGIN SCREEN UI
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        # Display logo on login screen if it exists
+        try:
+            st.image("logo.png", width=150)
+        except:
+            st.markdown(f"# {APP_ICON}")
+    with col2:
+         st.markdown(f"# {APP_NAME}")
+         st.markdown("### Secure Login")
+
     password_input = st.text_input("Enter Password", type="password")
     
     if st.button("Log In"):
@@ -231,9 +242,14 @@ def scrub_session_notes(pdf_file):
 # 4. MAIN APP EXECUTION
 # ==========================================
 if check_password():
+    # --- HEADER / LOGO AREA ---
     col1, col2 = st.columns([1, 5])
     with col1:
-        st.markdown(f"# {APP_ICON}")
+        # Display logo if it exists, otherwise show the shield icon
+        try:
+            st.image("logo.png", width=150)
+        except:
+             st.markdown(f"# {APP_ICON}")
     with col2:
         st.title(APP_NAME)
     
