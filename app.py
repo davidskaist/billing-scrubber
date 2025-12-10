@@ -33,7 +33,7 @@ MIN_GOALS_PER_HOUR = 1
 # LOGIC: BILLING SCRUBBER
 # ==========================================
 def scrub_billing_data(df):
-    # [Keep existing logic exactly as it was]
+    # [Logic remains unchanged]
     df.columns = df.columns.str.strip()
     df['ProcedureCode'] = pd.to_numeric(df['ProcedureCode'], errors='coerce')
     df = df.dropna(subset=['ProcedureCode'])
@@ -107,39 +107,53 @@ def scrub_billing_data(df):
     return issues
 
 # ==========================================
-# LOGIC: NOTE SCRUBBER (PDF)
+# LOGIC: NOTE SCRUBBER (PDF) - MULTI-PAGE FIX
 # ==========================================
 def scrub_session_notes(pdf_file):
     note_issues = []
     
+    # 1. Extract ALL text from the PDF into one giant string
+    full_text = ""
     with pdfplumber.open(pdf_file) as pdf:
-        # Loop through pages (skip first 2 summary pages usually)
-        for i, page in enumerate(pdf.pages):
-            text = page.extract_text()
-            if not text:
-                continue
+        for page in pdf.pages:
+            extracted = page.extract_text()
+            if extracted:
+                full_text += extracted + "\n===PAGE_BREAK===\n"
 
-            # IDENTIFY A NOTE PAGE
-            # We look for "Goal Summary" or "Activities" to confirm this is a note
-            if "Goal Summary" in text or "Activities that were used" in text:
-                
-                # 1. CHECK PARTICIPANTS (Checkboxes)
-                # Looking for checked box ☑
-                # Simplistic check: If "Client" appears but no checkmark near it? 
-                # This is tricky without perfect layout analysis, but we can check generally
-                if "Session participants" in text:
-                    if "☑" not in text and "[x]" not in text:
-                         note_issues.append({'Page': i+1, 'Issue': 'Participants Unchecked', 'Detail': 'No checkboxes found in participant section'})
+    # 2. Split by "Activity Statement" to separate individual notes
+    # (Assuming "Activity Statement" or similar header marks start of new note)
+    # Based on your file, it seems notes are separated by Appendices or "Activity Statement"
+    # Let's try splitting by "Activity Statement -" as a delimiter if it appears at start
+    
+    # improved strategy: Iterate through the text, looking for "Goal Summary"
+    # and checking the surrounding context.
+    
+    # Since splitting perfectly is hard without clear delimiters, 
+    # we will search for "Goal Summary" and look ahead for a Signature.
+    
+    # Split text into chunks based on the visual separator we saw: "Activity Statement"
+    notes = full_text.split("Activity Statement")
+    
+    # Skip the first chunk if it's empty or just the cover page
+    for i, note_content in enumerate(notes[1:]): 
+        # We start at index 1 because split() makes the first part empty if it starts with the delimiter
+        
+        # Only check if this chunk looks like a real session note (has goals)
+        if "Goal Summary" in note_content or "Activities that were used" in note_content:
+            
+            # A. CHECK PARTICIPANTS (Checkboxes)
+            if "Session participants" in note_content:
+                if "☑" not in note_content and "[x]" not in note_content:
+                     note_issues.append({'Note #': i+1, 'Issue': 'Participants Unchecked', 'Detail': 'No checkboxes found in participant section'})
 
-                # 2. GOAL COUNT
-                # Count how many times data was added
-                goal_count = text.count("added a data point")
-                if goal_count < 1:
-                     note_issues.append({'Page': i+1, 'Issue': 'No Data Points', 'Detail': 'Goal Summary appears empty'})
-                
-                # 3. SIGNATURES
-                if "Signed On:" not in text:
-                     note_issues.append({'Page': i+1, 'Issue': 'Missing Signature', 'Detail': 'Provider signature timestamp not found'})
+            # B. GOAL COUNT
+            goal_count = note_content.count("added a data point")
+            if goal_count < 1:
+                 note_issues.append({'Note #': i+1, 'Issue': 'No Data Points', 'Detail': 'Goal Summary appears empty'})
+            
+            # C. SIGNATURES (The Fix: Checking the whole note chunk)
+            if "Signed On:" not in note_content:
+                 note_issues.append({'Note #': i+1, 'Issue': 'Missing Signature', 'Detail': 'Provider signature timestamp not found'})
 
     return note_issues
 
