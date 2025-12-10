@@ -5,54 +5,50 @@ import io
 import warnings
 import re
 from collections import Counter
-import bcrypt  # Security tool
+import bcrypt
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
 # ==========================================
-# 0. PAGE CONFIG (Must be first)
+# 0. PAGE CONFIG & BRANDING
 # ==========================================
-st.set_page_config(page_title="Billing & Notes Scrubber", page_icon="🔐", layout="wide")
+APP_NAME = "Compliance Audit Portal"
+APP_ICON = "🛡️" 
+
+st.set_page_config(page_title=APP_NAME, page_icon=APP_ICON, layout="wide")
 
 # ==========================================
 # 1. SECURITY & LOGIN LOGIC
 # ==========================================
 def check_password():
     """Returns `True` if the user had the correct password."""
+    # Hash for "Strides1!"
+    CORRECT_HASH = b'$2b$12$o49A0gROa2i0bqpEDVY9o.v9LQFlbQmD5HG4.njyOiGJBI1qmfqOS'
 
-    # 1. Define the Secret Hash (The one you generated)
-    # We convert it to bytes for the checker to read it
-    CORRECT_HASH = CORRECT_HASH = CORRECT_HASH = CORRECT_HASH = b'$2b$12$o49A0gROa2i0bqpEDVY9o.v9LQFlbQmD5HG4.njyOiGJBI1qmfqOS'
-
-    # 2. Check Session State (Did they already log in?)
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
 
     if st.session_state["password_correct"]:
         return True
 
-    # 3. Show Login Inputs
-    st.title("🔐 Team Login")
-    st.markdown("Please enter the team password to access the QA Scrubber.")
-    
-    password_input = st.text_input("Password", type="password")
+    st.markdown(f"# {APP_ICON} {APP_NAME}")
+    st.markdown("### Secure Login")
+    password_input = st.text_input("Enter Password", type="password")
     
     if st.button("Log In"):
-        # Check the input against the hash
         try:
             if bcrypt.checkpw(password_input.encode(), CORRECT_HASH):
                 st.session_state["password_correct"] = True
-                st.rerun()  # Refresh to show the app
+                st.rerun()
             else:
                 st.error("❌ Incorrect password")
         except Exception as e:
             st.error(f"Login Error: {e}")
-
     return False
 
 # ==========================================
-# 2. CONFIGURATION & RULES (Your Scrub Logic)
+# 2. CONFIGURATION & RULES
 # ==========================================
 MAX_SESSION_HOURS = 4        
 MAX_SUPERVISION_HOURS = 2    
@@ -60,10 +56,19 @@ HIGH_DRIVE_TIME = 60
 
 CODE_DIRECT_CARE = 97153
 CODE_SUPERVISION_1 = 97155
-CODE_PARENT_TRAINING_ALL = [97156, 97157, 96167, 96168, 96170, 96171]
 
-BASE_ADDON_PAIRS = {96158: 96159, 96164: 96165, 96167: 96168, 96170: 96171}
+# Updated Supervision Requirements (Base numeric codes only)
+# 96156 covers "96156EP26"
+REQUIRED_MONTHLY_SUPERVISION = [97155, 96156] 
+
+BASE_ADDON_PAIRS = {
+    96158: 96159, 
+    96164: 96165,  
+    96167: 96168,  
+    96170: 96171   
+}
 BASE_CODES = list(BASE_ADDON_PAIRS.keys())
+
 SUPERVISION_PAIRS = {97155: 97153, 96156: 96159}
 CODES_CONFLICT_WITH_DIRECT = [96167, 96168] 
 FORBIDDEN_LOCATIONS_CODES = [3, '03']
@@ -76,9 +81,19 @@ MIN_GOALS_PER_HOUR = 1
 # ==========================================
 def scrub_billing_data(df):
     df.columns = df.columns.str.strip()
+    
+    # --- UPDATED DATA CLEANING ---
+    # 1. Convert to string to handle "96156EP26"
+    df['ProcedureCode'] = df['ProcedureCode'].astype(str).str.strip()
+    
+    # 2. Extract first 5 digits (Turns "96156EP26" -> "96156")
+    df['ProcedureCode'] = df['ProcedureCode'].str.extract(r'^(\d{5})')[0]
+    
+    # 3. Convert to Number
     df['ProcedureCode'] = pd.to_numeric(df['ProcedureCode'], errors='coerce')
     df = df.dropna(subset=['ProcedureCode'])
 
+    # Standardize Names
     if 'Client Name' not in df.columns:
         df['Client Name'] = df['ClientFirstName'].fillna('') + ' ' + df['ClientLastName'].fillna('')
     if 'Provider Name' not in df.columns:
@@ -96,7 +111,7 @@ def scrub_billing_data(df):
     
     issues = []
 
-    # Row Checks
+    # --- ROW CHECKS ---
     for index, row in df.iterrows():
         if row['TimeWorkedInHours'] > MAX_SESSION_HOURS:
             issues.append({'Client': row['Client Name'], 'Date': row['DateOnly'], 'Issue': 'Session > 4 Hours', 'Detail': f"{row['ProcedureCode']} lasted {row['TimeWorkedInHours']} hrs"})
@@ -109,25 +124,49 @@ def scrub_billing_data(df):
         if row['DriveTimeInMinutes'] > HIGH_DRIVE_TIME:
              issues.append({'Client': row['Client Name'], 'Date': row['DateOnly'], 'Issue': 'High Travel Time', 'Detail': f"{row['DriveTimeInMinutes']} mins"})
 
-    # Group Checks
+    # --- GROUP CHECKS ---
     for (client, date), group in df.groupby(['Client Name', 'DateOnly']):
         codes_today = group['ProcedureCode'].tolist()
+        
+        # 1. Direct vs Family Conflict
         if CODE_DIRECT_CARE in codes_today and any(c in CODES_CONFLICT_WITH_DIRECT for c in codes_today):
             issues.append({'Client': client, 'Date': date, 'Issue': 'Direct Care & Family Conflict', 'Detail': 'Cannot bill 97153 + Family same day'})
+        
+        # 2. Base Code Duplicates (Requirement 2: Can't have 2 96158s)
         for base_code in BASE_CODES:
             if codes_today.count(base_code) > 1:
-                issues.append({'Client': client, 'Date': date, 'Issue': f'Duplicate Base {base_code}', 'Detail': 'Billed multiple times'})
+                issues.append({'Client': client, 'Date': date, 'Issue': f'Duplicate Base {base_code}', 'Detail': 'Billed multiple times in one day'})
+        
+        # 3. Add-on Logic (Requirement 3: Sequence & Overlap)
         for base_code, addon_code in BASE_ADDON_PAIRS.items():
             addon_rows = group[group['ProcedureCode'] == addon_code]
             base_rows = group[group['ProcedureCode'] == base_code]
+            
             if not addon_rows.empty:
                 if base_rows.empty:
-                    issues.append({'Client': client, 'Date': date, 'Issue': f'Orphaned Add-on {addon_code}', 'Detail': 'No Base Code'})
+                    issues.append({'Client': client, 'Date': date, 'Issue': f'Orphaned Add-on {addon_code}', 'Detail': 'No Base Code found'})
                 else:
-                    if base_rows['TimeWorkedFrom'].min() > addon_rows['TimeWorkedFrom'].min():
-                        issues.append({'Client': client, 'Date': date, 'Issue': 'Sequence Error', 'Detail': f'Base {base_code} started AFTER Add-on'})
+                    # We have both Base and Add-on. Check Strict Adjacency.
+                    # Assuming 1 base code per day (checked above)
+                    base_row = base_rows.iloc[0]
+                    base_end = base_row['TimeWorkedTo']
+                    base_start = base_row['TimeWorkedFrom']
+                    
+                    for _, addon_row in addon_rows.iterrows():
+                        addon_start = addon_row['TimeWorkedFrom']
+                        addon_end = addon_row['TimeWorkedTo']
+                        
+                        # Check 1: Overlap
+                        if (addon_start < base_end) and (addon_end > base_start):
+                             issues.append({'Client': client, 'Date': date, 'Issue': f'Overlap {base_code}/{addon_code}', 'Detail': 'Base and Add-on overlap in time'})
+                        
+                        # Check 2: Gap (Must be "Right Before")
+                        # Allow 1 minute buffer for clock differences, otherwise flag
+                        time_diff = abs((addon_start - base_end).total_seconds())
+                        if time_diff > 60: 
+                             issues.append({'Client': client, 'Date': date, 'Issue': 'Gap Error', 'Detail': f'Gap between {base_code} end and {addon_code} start'})
 
-    # Overlap Checks
+    # --- OVERLAP CHECKS (Supervision vs Direct) ---
     for sup_code, target_code in SUPERVISION_PAIRS.items():
         sup_rows = df[df['ProcedureCode'] == sup_code]
         target_rows = df[df['ProcedureCode'] == target_code]
@@ -139,10 +178,16 @@ def scrub_billing_data(df):
                 if sup_code == CODE_SUPERVISION_1:
                     df.loc[overlap.index, 'is_supervised'] = True
 
-    # Monthly Checks
+    # --- MONTHLY CHECKS (Requirement 1: At least one supervision) ---
     for client, group in df.groupby('Client Name'):
-        if not any(c in group['ProcedureCode'].tolist() for c in CODE_PARENT_TRAINING_ALL):
-            issues.append({'Client': client, 'Date': 'Monthly', 'Issue': 'Missing Parent Training', 'Detail': 'None this month'})
+        # Check if ANY of the required supervision codes exist in the whole month
+        # This covers 97155 (ABA) OR 96156 (DIR/EP26)
+        has_supervision = any(c in group['ProcedureCode'].tolist() for c in REQUIRED_MONTHLY_SUPERVISION)
+        
+        if not has_supervision:
+            issues.append({'Client': client, 'Date': 'Monthly', 'Issue': 'Missing Monthly Supervision', 'Detail': 'No 97155 or 96156/EP26 billed this month'})
+        
+        # RBT Check
         direct_providers = group[group['ProcedureCode'] == CODE_DIRECT_CARE]['Provider Name'].unique()
         for provider in direct_providers:
             p_sessions = group[(group['Provider Name'] == provider) & (group['ProcedureCode'] == CODE_DIRECT_CARE)]
@@ -185,11 +230,15 @@ def scrub_session_notes(pdf_file):
 # ==========================================
 # 4. MAIN APP EXECUTION
 # ==========================================
-# IF PASSWORD IS VALID, SHOW THE APP
 if check_password():
-    st.title("🧼 QA Scrubber Suite")
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        st.markdown(f"# {APP_ICON}")
+    with col2:
+        st.title(APP_NAME)
     
-    # Logout Button (Optional: Clears session)
+    st.markdown("### Automated Compliance Auditing")
+
     if st.sidebar.button("Log Out"):
         st.session_state["password_correct"] = False
         st.rerun()
@@ -197,7 +246,7 @@ if check_password():
     tab1, tab2 = st.tabs(["💰 Billing Scrubber", "📝 Note Scrubber (PDF)"])
 
     with tab1:
-        st.header("Billing Compliance Audit")
+        st.header("Billing Audit")
         uploaded_file = st.file_uploader("Upload Billing CSV/Excel", type=['csv', 'xlsx'])
         if uploaded_file:
             st.write("Analyzing Billing...")
@@ -221,7 +270,7 @@ if check_password():
                 st.error(f"Error: {e}")
 
     with tab2:
-        st.header("Session Note Audit (PDF)")
+        st.header("Session Note Audit")
         uploaded_pdf = st.file_uploader("Upload Session Notes PDF", type=['pdf'])
         if uploaded_pdf:
             st.write("Scanning PDF for Compliance...")
@@ -239,6 +288,3 @@ if check_password():
                     st.download_button("📥 Download Note Report", buffer_pdf, "Note_Issues.xlsx")
             except Exception as e:
                 st.error(f"Error reading PDF: {e}")
-
-
-
