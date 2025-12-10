@@ -23,7 +23,7 @@ def check_password():
 
     # 1. Define the Secret Hash (The one you generated)
     # We convert it to bytes for the checker to read it
-    CORRECT_HASH = CORRECT_HASH = CORRECT_HASH = b'$2b$12$Yhgtr2xi.Vm5w0YmRClyzOgqfhOBBR8l82sMcHhpbe6c/6Z4UaLUO'
+    CORRECT_HASH = CORRECT_HASH = CORRECT_HASH = CORRECT_HASH = b'$2b$12$o49A0gROa2i0bqpEDVY9o.v9LQFlbQmD5HG4.njyOiGJBI1qmfqOS'
 
     # 2. Check Session State (Did they already log in?)
     if "password_correct" not in st.session_state:
@@ -239,5 +239,6 @@ if check_password():
                     st.download_button("📥 Download Note Report", buffer_pdf, "Note_Issues.xlsx")
             except Exception as e:
                 st.error(f"Error reading PDF: {e}")
+
 
 
