@@ -158,4 +158,43 @@ def scrub_session_notes(pdf_file):
             # Using Regex to find any of the standard codes
             found_codes = re.findall(r'\b(97153|97155|97156|96158|96159|96167|96168)\b', note_content)
             if not found_codes:
-                 note_issues.append({'Note #
+                 note_issues.append({'Note #': i+1, 'Issue': 'Missing CPT Code', 'Detail': 'No valid billing code found in text'})
+
+            # --- CHECK: PARTICIPANTS ---
+            if "Session participants" in note_content:
+                if "☑" not in note_content and "[x]" not in note_content:
+                     note_issues.append({'Note #': i+1, 'Issue': 'Participants Unchecked', 'Detail': 'No checkboxes found'})
+
+            # --- CHECK: GOALS & DUPLICATES ---
+            goal_lines = re.findall(r"added a data point .*? to (.*?) for", note_content)
+            
+            if len(goal_lines) < 1:
+                 note_issues.append({'Note #': i+1, 'Issue': 'No Data Points', 'Detail': 'Goal Summary empty'})
+            else:
+                # Check for Duplicates
+                if len(goal_lines) != len(set(goal_lines)):
+                    # Identify duplicates
+                    duplicates = [item for item, count in Counter(goal_lines).items() if count > 1]
+                    note_issues.append({'Note #': i+1, 'Issue': 'Duplicate Goals', 'Detail': f"Goals repeated: {', '.join(duplicates)}"})
+
+            # --- CHECK: SIGNATURES ---
+            if "Signed On:" not in note_content:
+                 note_issues.append({'Note #': i+1, 'Issue': 'Missing Signature', 'Detail': 'Provider signature timestamp not found'})
+
+    return note_issues
+
+# ==========================================
+# WEB INTERFACE
+# ==========================================
+st.set_page_config(page_title="Billing & Notes Scrubber", page_icon="🧼", layout="wide")
+
+st.title("🧼 QA Scrubber Suite")
+st.markdown("Automated auditing for Billing and Session Notes.")
+
+# TABS
+tab1, tab2 = st.tabs(["💰 Billing Scrubber", "📝 Note Scrubber (PDF)"])
+
+# --- TAB 1: BILLING ---
+with tab1:
+    st.header("Billing Compliance Audit")
+    uploaded_file = st.file_uploader
