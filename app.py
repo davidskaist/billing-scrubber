@@ -3,6 +3,7 @@ import pandas as pd
 import pdfplumber
 import io
 import warnings
+import re
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -35,6 +36,7 @@ MIN_GOALS_PER_HOUR = 1
 def scrub_billing_data(df):
     # [Logic remains unchanged]
     df.columns = df.columns.str.strip()
+    # Clean Procedure Codes
     df['ProcedureCode'] = pd.to_numeric(df['ProcedureCode'], errors='coerce')
     df = df.dropna(subset=['ProcedureCode'])
 
@@ -107,117 +109,31 @@ def scrub_billing_data(df):
     return issues
 
 # ==========================================
-# LOGIC: NOTE SCRUBBER (PDF) - MULTI-PAGE FIX
+# LOGIC: NOTE SCRUBBER (PDF) - UPDATED
 # ==========================================
 def scrub_session_notes(pdf_file):
     note_issues = []
     
-    # 1. Extract ALL text from the PDF into one giant string
+    # 1. Extract ALL text
     full_text = ""
     with pdfplumber.open(pdf_file) as pdf:
         for page in pdf.pages:
             extracted = page.extract_text()
             if extracted:
-                full_text += extracted + "\n===PAGE_BREAK===\n"
+                full_text += extracted + "\n"
 
-    # 2. Split by "Activity Statement" to separate individual notes
-    # (Assuming "Activity Statement" or similar header marks start of new note)
-    # Based on your file, it seems notes are separated by Appendices or "Activity Statement"
-    # Let's try splitting by "Activity Statement -" as a delimiter if it appears at start
-    
-    # improved strategy: Iterate through the text, looking for "Goal Summary"
-    # and checking the surrounding context.
-    
-    # Since splitting perfectly is hard without clear delimiters, 
-    # we will search for "Goal Summary" and look ahead for a Signature.
-    
-    # Split text into chunks based on the visual separator we saw: "Activity Statement"
+    # 2. Split into Notes by "Activity Statement"
     notes = full_text.split("Activity Statement")
     
-    # Skip the first chunk if it's empty or just the cover page
     for i, note_content in enumerate(notes[1:]): 
-        # We start at index 1 because split() makes the first part empty if it starts with the delimiter
-        
-        # Only check if this chunk looks like a real session note (has goals)
+        # Only process if it looks like a note
         if "Goal Summary" in note_content or "Activities that were used" in note_content:
             
-            # A. CHECK PARTICIPANTS (Checkboxes)
-            if "Session participants" in note_content:
-                if "☑" not in note_content and "[x]" not in note_content:
-                     note_issues.append({'Note #': i+1, 'Issue': 'Participants Unchecked', 'Detail': 'No checkboxes found in participant section'})
+            # --- NEW CHECK: TAX ID ---
+            if "Tax ID:" not in note_content:
+                note_issues.append({'Note #': i+1, 'Issue': 'Missing Tax ID', 'Detail': 'Tax ID field not found'})
 
-            # B. GOAL COUNT
-            goal_count = note_content.count("added a data point")
-            if goal_count < 1:
-                 note_issues.append({'Note #': i+1, 'Issue': 'No Data Points', 'Detail': 'Goal Summary appears empty'})
-            
-            # C. SIGNATURES (The Fix: Checking the whole note chunk)
-            if "Signed On:" not in note_content:
-                 note_issues.append({'Note #': i+1, 'Issue': 'Missing Signature', 'Detail': 'Provider signature timestamp not found'})
-
-    return note_issues
-
-# ==========================================
-# WEB INTERFACE
-# ==========================================
-st.set_page_config(page_title="Billing & Notes Scrubber", page_icon="🧼", layout="wide")
-
-st.title("🧼 QA Scrubber Suite")
-st.markdown("Automated auditing for Billing and Session Notes.")
-
-# TABS for different tools
-tab1, tab2 = st.tabs(["💰 Billing Scrubber", "📝 Note Scrubber (PDF)"])
-
-# --- TAB 1: BILLING ---
-with tab1:
-    st.header("Billing Compliance Audit")
-    uploaded_file = st.file_uploader("Upload Billing CSV/Excel", type=['csv', 'xlsx'])
-    
-    if uploaded_file:
-        st.write("Analyzing Billing...")
-        try:
-            if uploaded_file.name.endswith('.csv'):
-                df = pd.read_csv(uploaded_file)
-            else:
-                df = pd.read_excel(uploaded_file)
-            
-            issues = scrub_billing_data(df)
-
-            if not issues:
-                st.success("✅ No Billing Errors Found!")
-            else:
-                st.error(f"❌ Found {len(issues)} Billing Issues")
-                report_df = pd.DataFrame(issues)
-                st.dataframe(report_df, use_container_width=True)
-                
-                buffer = io.BytesIO()
-                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                    report_df.to_excel(writer, index=False)
-                st.download_button("📥 Download Billing Report", buffer, "Billing_Report.xlsx")
-        except Exception as e:
-            st.error(f"Error: {e}")
-
-# --- TAB 2: NOTES ---
-with tab2:
-    st.header("Session Note Audit (PDF)")
-    uploaded_pdf = st.file_uploader("Upload Session Notes PDF", type=['pdf'])
-    
-    if uploaded_pdf:
-        st.write("Scanning PDF for Compliance...")
-        try:
-            note_issues = scrub_session_notes(uploaded_pdf)
-            
-            if not note_issues:
-                st.success("✅ No Note Issues Found! (Or no notes detected)")
-            else:
-                st.error(f"❌ Found {len(note_issues)} Issues in Notes")
-                note_df = pd.DataFrame(note_issues)
-                st.dataframe(note_df, use_container_width=True)
-                
-                buffer_pdf = io.BytesIO()
-                with pd.ExcelWriter(buffer_pdf, engine='xlsxwriter') as writer:
-                    note_df.to_excel(writer, index=False)
-                st.download_button("📥 Download Note Report", buffer_pdf, "Note_Issues.xlsx")
-                
-        except Exception as e:
-            st.error(f"Error reading PDF: {e}")
+            # --- NEW CHECK: CPT CODES ---
+            # Check if at least one standard code appears (97153, 97155, 96159, etc)
+            # We look for the 5-digit number pattern
+            found_codes = re.findall(r'\b(97153|97155|97156
