@@ -139,3 +139,4 @@ def scrub_session_notes(pdf_file):
             found_codes = re.findall(r'\b(97153|97155|97156|96158|96159|96167|96168)\b', note_content)
 
 
+
